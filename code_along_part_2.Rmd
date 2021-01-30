@@ -1,0 +1,164 @@
+---
+title: "Intro to Time Series wrangling & viz"
+author: "Danielle Sclafani"
+date: "1/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(lubridate)
+library(tsibble)
+library(feasts)
+library(slider)
+```
+
+## read in data
+
+```{r}
+toolik <- read_csv(here("data","toolikweather.csv"))
+
+```
+
+## Convert this into a tsibble
+
+```{r}
+# use lubridate to convert date column into class date
+
+toolik_ts <- toolik %>% 
+  mutate(date = lubridate::mdy(date)) %>% 
+  as_tsibble(key = NULL, index = date)
+
+```
+
+
+```{r}
+ggplot(data = toolik_ts, aes(x = date, y = mean_airtemp))+
+  geom_line()
+```
+
+## use  `index_by()` function to aggregate time series information by intervals we specify
+```{r}
+# finding the mean temperature by month
+toolik_month <- toolik_ts %>% 
+  index_by(yr_mo = ~yearmonth(.)) %>% #instead of group_by
+  summarize(monthly_mean_temp = mean(mean_airtemp, na.rm = TRUE))
+
+ggplot(data = toolik_month, aes(x=yr_mo, y = monthly_mean_temp))+
+  geom_line()+
+  facet_wrap(~month(yr_mo, label = TRUE))
+```
+
+
+```{r}
+# finding the mean temperature by week
+toolik_week <- toolik_ts %>% 
+  index_by(weekly = ~yearweek(.)) %>% 
+  summarize(weekly_airtemp = mean(mean_airtemp, na.rm = TRUE), # average air temp of the week
+            min_airtemp = min(mean_airtemp)) #min air temp in that week
+```
+
+
+## filtering time series
+
+use `filter_index()` to specify ranges of time series to keep or exclude
+
+```{r}
+# only want to include observations from the start of june 2000 to the end of october 2001
+
+toolik_ts %>% 
+  filter_index("2000-06" ~ "2001-10")
+```
+
+filtering down to the day
+
+```{r}
+toolik_ts %>% 
+  filter_index("2006-04-10"~
+                 "2006-05-15")
+```
+
+## Seasonplots
+
+```{r}
+toolik_ts %>% 
+  filter(year(date) > 2014) %>% #filtering to years greater than 2014
+  gg_season(y = mean_airtemp)
+
+## this recognized years as individual seasons so plotted them out individually instead of year on the x axis. helps capture seasonality across years. here we see the same seasonality. 
+```
+
+
+
+```{r}
+toolik_month %>% 
+  gg_season(y=monthly_mean_temp)+
+  theme_light()
+#shows that no year is sticking out, they all follow similar patterns
+```
+
+### how to create a season subseries plot- break up subseries
+
+```{r}
+toolik_month %>% 
+  gg_subseries(monthly_mean_temp)
+```
+
+## Find the moving average, using slider package
+
+```{r}
+#create a test vector
+
+set.seed(2021)
+test<- rnorm(n= 100, mean = 40, sd =10)
+
+slide(test, ~.x, .before =2, .after =2) #creating the window for the moving average, in this case the window would be of 5 units. below it is showing us the window, the values of the points in the window. first observation wont have 5 values in window because it is the first point, has no points before it. original output is a list
+
+
+
+```
+
+```{r}
+roll_toolik_15 <- toolik_ts %>% 
+  mutate(ma_15d = as.numeric(slide(toolik_ts$mean_airtemp, 
+                                   mean,
+                                   .before =7,
+                                   .after =7)))
+
+ggplot() +
+  geom_line(data = toolik_ts, aes(x= date, y = mean_airtemp), size = 0.2, color = "gray") + # original data
+  geom_line(data = roll_toolik_15, aes(x = date, y = ma_15d)) + #rolling/moving average. should look like a smoother line
+    theme_minimal()
+```
+## Create the ACF
+
+```{r}
+toolik_ts %>% 
+  ACF(mean_airtemp) %>% 
+  autoplot()
+
+# this plot is telling us that days that are one day away from each other are highly correlated. as you get more time between days the correlation begins to decline slowly
+```
+
+```{r}
+toolik_month %>% 
+  ACF(monthly_mean_temp) %>% 
+  autoplot()
+
+# see clear seasonality. observations that are one month apart of strongly correlated. observations six months apart are strongly negatively correlated. 
+```
+
+## Time series decomposition - STL, seasonal trend and lowes 
+
+```{r}
+toolik_dec <- toolik_month %>% 
+  model(STL(monthly_mean_temp ~ season(window = Inf)))
+
+components(toolik_dec) %>% 
+  autoplot
+```
+
+
+
